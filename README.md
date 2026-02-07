@@ -1,6 +1,4 @@
 # Aeges-Confidentian-AI-Powered-Privacy-REA-Vault
-
-Aegis-Confidential/
 ├── contracts/                # Smart Contracts (Solidity)
 │   ├── AegisVault.sol        # Kontrak Utama (Deposit/Withdraw)
 │   ├── RWAToken.sol          # Tokenisasi Aset Riil (ERC20/ERC1155)
@@ -22,3 +20,4 @@ Aegis-Confidential/
 ├── .env.example              # Template Environment Variables
 ├── hardhat.config.js         # Konfigurasi Development Framework
 └── README.md                 # Pitch, Cara Install, dan Demo Video
+
