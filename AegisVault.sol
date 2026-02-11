@@ -1,61 +1,253 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
+import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
+import "./libraries/PriceConverter.sol";
+import "./libraries/AegisAccessControl.sol";
+import "./interfaces/IAegisVault.sol";
+import "./interfaces/IRWAToken.sol";
 
 /**
- * @title AegisVault
- * @dev Vault untuk menyimpan dana user dan mengalokasikannya ke aset RWA berdasarkan instruksi AI.
+ * @title AegisVault - AI-Powered Privacy RWA Vault
+ * @dev Integrates Chainlink Functions for AI insights, Data Feeds for pricing
  */
-contract AegisVault is ERC4626, Ownable {
+contract AegisVault is ChainlinkClient, ConfirmedOwner, IAegisVault {
+    using Chainlink for Chainlink.Request;
+    using PriceConverter for uint256;
     
-    // Alamat kontrak AI Controller yang diizinkan memindahkan dana
-    address public aiController;
-
-    event AIControllerUpdated(address indexed newController);
-    event FundsAllocated(address indexed rwaAsset, uint256 amount);
-
-    constructor(
-        IERC20 _asset, 
-        string memory _name, 
-        string memory _symbol
-    ) ERC4626(_asset) ERC20(_name, _symbol) Ownable(msg.sender) {}
-
-    /**
-     * @notice Membatasi akses hanya untuk AI Controller.
-     */
-    modifier onlyAI() {
-        require(msg.sender == aiController, "AegisVault: Only AI can trigger this");
+    // Chainlink Data Feed for ETH/USD
+    AggregatorV3Interface private s_priceFeed;
+    
+    // Chainlink Functions
+    bytes32 private s_jobId;
+    uint256 private s_fee;
+    
+    // Vault State
+    uint256 public totalAssets;
+    uint256 public totalShares;
+    mapping(address => uint256) public shares;
+    mapping(bytes32 => address) private s_requestIdToUser;
+    
+    // AI Insights
+    struct AIInsight {
+        uint256 timestamp;
+        string recommendation;
+        uint256 confidence;
+        RiskLevel riskLevel;
+    }
+    
+    enum RiskLevel { LOW, MEDIUM, HIGH }
+    
+    mapping(address => AIInsight) public userInsights;
+    mapping(address => bool) public pendingAIRequests;
+    
+    // Events
+    event Deposit(address indexed user, uint256 assets, uint256 shares);
+    event Withdraw(address indexed user, uint256 assets, uint256 shares);
+    event AIRequested(address indexed user, bytes32 requestId);
+    event AIReceived(address indexed user, string recommendation, uint256 confidence);
+    event EmergencyPaused(address indexed admin, string reason);
+    
+    // Modifiers
+    modifier onlyWhenNotPaused() {
+        require(!AegisAccessControl.isPaused(), "Vault is paused");
         _;
     }
-
-    /**
-     * @dev Update alamat AI Controller.
-     */
-    function setAIController(address _aiController) external onlyOwner {
-        require(_aiController != address(0), "Invalid address");
-        aiController = _aiController;
-        emit AIControllerUpdated(_aiController);
+    
+    modifier onlyWithSubscription() {
+        require(AegisAccessControl.hasSubscription(msg.sender), "No active subscription");
+        _;
     }
-
-    /**
-     * @dev Fungsi utama bagi AI untuk mengalokasikan dana ke aset RWA.
-     * @param _rwaToken Alamat token RWA yang akan dibeli.
-     * @param _amount Jumlah dana yang dialokasikan.
-     */
-    function allocateToRWA(address _rwaToken, uint256 _amount) external onlyAI {
-        require(asset().balanceOf(address(this)) >= _amount, "Insufficient vault balance");
-        
-        // Logika sederhana: AI memindahkan dana ke kontrak RWA untuk ditukar dengan token RWA
-        asset().transfer(_rwaToken, _amount);
-        
-        emit FundsAllocated(_rwaToken, _amount);
+    
+    constructor(
+        address priceFeed,
+        address chainlinkToken,
+        address oracle,
+        bytes32 jobId,
+        uint256 fee
+    ) ConfirmedOwner(msg.sender) {
+        setChainlinkToken(chainlinkToken);
+        setChainlinkOracle(oracle);
+        s_priceFeed = AggregatorV3Interface(priceFeed);
+        s_jobId = jobId;
+        s_fee = fee;
     }
-
-    // Fungsi tambahan untuk menghitung total aset termasuk yang ada di RWA (untuk juri)
-    function totalAssets() public view override returns (uint256) {
-        // Di sini nantinya ditambahkan logika untuk menghitung nilai RWA yang sedang di-hold
-        return super.totalAssets();
+    
+    /**
+     * @dev Deposit assets into vault, receive shares
+     * @param rwaToken Address of RWA token to deposit
+     */
+    function deposit(address rwaToken, uint256 amount) 
+        external 
+        onlyWhenNotPaused 
+        onlyWithSubscription 
+        returns (uint256) 
+    {
+        require(amount > 0, "Amount must be > 0");
+        require(IRWAToken(rwaToken).transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        
+        // Calculate shares (simplified 1:1 for demo)
+        uint256 shareAmount = amount;
+        
+        shares[msg.sender] += shareAmount;
+        totalShares += shareAmount;
+        totalAssets += amount;
+        
+        // Trigger AI analysis on deposit
+        _requestAIInsight(msg.sender);
+        
+        emit Deposit(msg.sender, amount, shareAmount);
+        return shareAmount;
+    }
+    
+    /**
+     * @dev Withdraw assets from vault
+     */
+    function withdraw(address rwaToken, uint256 shareAmount) 
+        external 
+        onlyWhenNotPaused 
+        returns (uint256) 
+    {
+        require(shareAmount > 0, "Shares must be > 0");
+        require(shares[msg.sender] >= shareAmount, "Insufficient shares");
+        
+        uint256 assetAmount = shareAmount; // 1:1 for demo
+        
+        shares[msg.sender] -= shareAmount;
+        totalShares -= shareAmount;
+        totalAssets -= assetAmount;
+        
+        require(IRWAToken(rwaToken).transfer(msg.sender, assetAmount), "Transfer failed");
+        
+        emit Withdraw(msg.sender, assetAmount, shareAmount);
+        return assetAmount;
+    }
+    
+    /**
+     * @dev Request AI insight via Chainlink Functions
+     */
+    function requestAIInsight() external onlyWithSubscription returns (bytes32 requestId) {
+        require(!pendingAIRequests[msg.sender], "Request already pending");
+        
+        Chainlink.Request memory req = buildChainlinkRequest(
+            s_jobId,
+            address(this),
+            this.fulfillAIInsight.selector
+        );
+        
+        // Encode user data for AI analysis
+        string memory userData = string(abi.encodePacked(
+            "{\"user\":\"",
+            _addressToString(msg.sender),
+            "\",\"balance\":\"",
+            _uintToString(shares[msg.sender]),
+            "\",\"timestamp\":\"",
+            _uintToString(block.timestamp),
+            "\"}"
+        ));
+        
+        req.add("data", userData);
+        req.add("path", "recommendation,confidence");
+        
+        // Send request
+        requestId = sendChainlinkRequest(req, s_fee);
+        s_requestIdToUser[requestId] = msg.sender;
+        pendingAIRequests[msg.sender] = true;
+        
+        emit AIRequested(msg.sender, requestId);
+    }
+    
+    /**
+     * @dev Chainlink Functions callback
+     */
+    function fulfillAIInsight(bytes32 requestId, bytes memory response) 
+        public 
+        recordChainlinkFulfillment(requestId) 
+    {
+        address user = s_requestIdToUser[requestId];
+        require(user != address(0), "Invalid request");
+        
+        // Parse AI response (simplified)
+        (string memory recommendation, uint256 confidence) = 
+            abi.decode(response, (string, uint256));
+        
+        // Store insight
+        userInsights[user] = AIInsight({
+            timestamp: block.timestamp,
+            recommendation: recommendation,
+            confidence: confidence,
+            riskLevel: _calculateRiskLevel(confidence)
+        });
+        
+        pendingAIRequests[user] = false;
+        
+        emit AIReceived(user, recommendation, confidence);
+    }
+    
+    /**
+     * @dev Get current ETH value in USD using Chainlink Data Feed
+     */
+    function getAssetValueInUSD(uint256 ethAmount) public view returns (uint256) {
+        return ethAmount.getConversionRate(s_priceFeed);
+    }
+    
+    /**
+     * @dev Emergency pause function
+     */
+    function emergencyPause(string memory reason) external onlyOwner {
+        AegisAccessControl.pause();
+        emit EmergencyPaused(msg.sender, reason);
+    }
+    
+    /**
+     * @dev Resume operations
+     */
+    function resume() external onlyOwner {
+        AegisAccessControl.resume();
+    }
+    
+    // ========== INTERNAL FUNCTIONS ==========
+    
+    function _requestAIInsight(address user) internal {
+        // In production, would call requestAIInsight()
+        // For demo, simulate with mock data
+        userInsights[user] = AIInsight({
+            timestamp: block.timestamp,
+            recommendation: "Hold - Market conditions favorable",
+            confidence: 75,
+            riskLevel: RiskLevel.LOW
+        });
+    }
+    
+    function _calculateRiskLevel(uint256 confidence) internal pure returns (RiskLevel) {
+        if (confidence >= 80) return RiskLevel.LOW;
+        if (confidence >= 50) return RiskLevel.MEDIUM;
+        return RiskLevel.HIGH;
+    }
+    
+    function _addressToString(address addr) internal pure returns (string memory) {
+        return Strings.toHexString(uint256(uint160(addr)), 20);
+    }
+    
+    function _uintToString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        
+        return string(buffer);
     }
 }
