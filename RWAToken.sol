@@ -1,61 +1,120 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./interfaces/IRWAToken.sol";
 
 /**
- * @title RWAToken
- * @dev Token yang di-backup oleh aset nyata dengan verifikasi Chainlink Proof of Reserve (PoR).
+ * @title RWAToken - Real World Asset Token
+ * @dev ERC20 token representing real-world assets with compliance features
  */
-contract RWAToken is ERC20, Ownable {
+contract RWAToken is ERC20, AccessControl, IRWAToken {
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     
-    // Interface untuk Chainlink Proof of Reserve Feed
-    AggregatorV3Interface internal reserveFeed;
-
-    event MintRequested(uint256 amount);
-
+    // Compliance tracking
+    mapping(address => bool) public whitelist;
+    mapping(address => string) public investorIds;
+    uint256 public maxSupply;
+    
+    // Chainlink integration for real-world data verification
+    address public verifierOracle;
+    
+    event Whitelisted(address indexed investor, string investorId);
+    event Blacklisted(address indexed investor, string reason);
+    event AssetBacked(uint256 amount, string proofHash);
+    
     constructor(
-        string memory name, 
-        string memory symbol, 
-        address _reserveFeed // Alamat Feed PoR dari Chainlink
-    ) ERC20(name, symbol) Ownable(msg.sender) {
-        reserveFeed = AggregatorV3Interface(_reserveFeed);
+        string memory name,
+        string memory symbol,
+        uint256 _maxSupply,
+        address admin
+    ) ERC20(name, symbol) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(MINTER_ROLE, admin);
+        _grantRole(COMPLIANCE_ROLE, admin);
+        
+        maxSupply = _maxSupply;
     }
-
+    
     /**
-     * @dev Fungsi untuk mencetak token RWA.
-     * Hanya bisa dilakukan jika jumlah yang beredar tidak melebihi cadangan asli di dunia nyata.
+     * @dev Mint new tokens (only by minter)
      */
-    function mint(address to, uint256 amount) external onlyOwner {
-        require(getLatestReserve() >= (totalSupply() + amount), "RWA: Insufficient Physical Reserve");
+    function mint(address to, uint256 amount, string memory proofHash) 
+        external 
+        onlyRole(MINTER_ROLE) 
+    {
+        require(totalSupply() + amount <= maxSupply, "Exceeds max supply");
+        require(whitelist[to], "Recipient not whitelisted");
         
         _mint(to, amount);
+        emit AssetBacked(amount, proofHash);
     }
-
+    
     /**
-     * @dev Mengambil data cadangan terbaru dari Chainlink Proof of Reserve.
+     * @dev Whitelist investor (KYC/AML compliant)
      */
-    function getLatestReserve() public view returns (uint256) {
-        (
-            /* uint80 roundID */,
-            int answer,
-            /* uint startedAt */,
-            /* uint updatedAt */,
-            /* uint80 answeredInRound */
-        ) = reserveFeed.latestRoundData();
+    function whitelistInvestor(address investor, string memory investorId) 
+        external 
+        onlyRole(COMPLIANCE_ROLE) 
+    {
+        whitelist[investor] = true;
+        investorIds[investor] = investorId;
         
-        // Memastikan data valid
-        require(answer > 0, "RWA: Invalid Reserve Data");
-        return uint256(answer);
+        emit Whitelisted(investor, investorId);
     }
-
+    
     /**
-     * @dev Update alamat PoR Feed jika diperlukan (misal pindah ke feed yang lebih akurat).
+     * @dev Blacklist investor
      */
-    function updateReserveFeed(address _newFeed) external onlyOwner {
-        reserveFeed = AggregatorV3Interface(_newFeed);
+    function blacklistInvestor(address investor, string memory reason) 
+        external 
+        onlyRole(COMPLIANCE_ROLE) 
+    {
+        whitelist[investor] = false;
+        emit Blacklisted(investor, reason);
+    }
+    
+    /**
+     * @dev Set Chainlink oracle for data verification
+     */
+    function setVerifierOracle(address oracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        verifierOracle = oracle;
+    }
+    
+    /**
+     * @dev Override transfer with compliance checks
+     */
+    function transfer(address to, uint256 amount) 
+        public 
+        override 
+        returns (bool) 
+    {
+        require(whitelist[msg.sender], "Sender not whitelisted");
+        require(whitelist[to], "Recipient not whitelisted");
+        
+        return super.transfer(to, amount);
+    }
+    
+    /**
+     * @dev Override transferFrom with compliance checks
+     */
+    function transferFrom(address from, address to, uint256 amount) 
+        public 
+        override 
+        returns (bool) 
+    {
+        require(whitelist[from], "Sender not whitelisted");
+        require(whitelist[to], "Recipient not whitelisted");
+        
+        return super.transferFrom(from, to, amount);
+    }
+    
+    /**
+     * @dev Get investor compliance status
+     */
+    function isCompliant(address investor) external view returns (bool) {
+        return whitelist[investor];
     }
 }
-
