@@ -22,7 +22,7 @@ Aegis-Confidential-AI-Powered-Privacy-REA-Vault/
 │   ├── setup_ccip.js
 │   ├── setup_functions.js
 │   └── fund_subscription.js
-|.   └── check_insight.js
+|    └── check_insight.js
 ├── functions/
 │   ├── ai_market_analyst.js
 │   ├── secrets-config.js
