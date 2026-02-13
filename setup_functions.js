@@ -26,6 +26,7 @@ async function main() {
     const linkToken = await hre.ethers.getContractAt("LinkToken", config.linkToken);
     
     const fundAmount = hre.ethers.parseEther("10"); // 10 LINK
+    // GANTI DENGAN INI:
     const fundTx = await linkToken.transferAndCall(
         functionsRouter.address,
         fundAmount,
