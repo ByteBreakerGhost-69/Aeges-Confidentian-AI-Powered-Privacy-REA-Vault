@@ -6,6 +6,7 @@ async function main() {
     console.log("🚀 Starting AegisVault deployment...");
     
     const network = hre.network.name;
+    const [deployer] = await hre.ethers.getSigners();  // ← TAMBAH!
     console.log(`📡 Network: ${network}`);
     
     const config = networkConfig[network];
