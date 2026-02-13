@@ -46,7 +46,9 @@ async function main() {
     
     // ========== 5. GRANT ROLES ==========
     console.log("\n5️⃣ Granting roles...");
-    await accessControl.grantRole(await accessControl.DEFAULT_ADMIN_ROLE(), deployer);
+    // GANTI DENGAN:
+    const [deployer] = await hre.ethers.getSigners();  // ← TAMBAHIN INI DI ATAS!
+    await accessControl.grantRole(await accessControl.DEFAULT_ADMIN_ROLE(), deployer.address);
     console.log(`✅ Admin role granted`);
     
     // ========== 6. VERIFY CONTRACTS (OPTIONAL) ==========
