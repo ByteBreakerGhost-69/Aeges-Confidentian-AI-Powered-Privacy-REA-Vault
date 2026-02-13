@@ -56,9 +56,17 @@ contract AegisVault is ChainlinkClient, ConfirmedOwner, IAegisVault {
         _;
     }
     
-    modifier onlyWithSubscription() {
-        require(AegisAccessControl.hasSubscription(msg.sender), "No active subscription");
+    // ✅ Implementasi sederhana dulu
+    mapping(address => bool) public hasActiveSubscription;
+
+     modifier onlyWithSubscription() {
+        require(hasActiveSubscription[msg.sender], "No active subscription");
         _;
+    }
+
+    // Fungsi untuk admin grant subscription
+    function grantSubscription(address user) external onlyOwner {
+        hasActiveSubscription[user] = true;
     }
     
     constructor(
@@ -162,16 +170,23 @@ contract AegisVault is ChainlinkClient, ConfirmedOwner, IAegisVault {
     /**
      * @dev Chainlink Functions callback
      */
-    function fulfillAIInsight(bytes32 requestId, bytes memory response) 
-        public 
-        recordChainlinkFulfillment(requestId) 
-    {
+    // ✅ Yang BENAR untuk Functions
+    function fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
         address user = s_requestIdToUser[requestId];
-        require(user != address(0), "Invalid request");
-        
-        // Parse AI response (simplified)
-        (string memory recommendation, uint256 confidence) = 
-            abi.decode(response, (string, uint256));
+    
+        if (err.length > 0) {
+            // Handle error
+            emit AIRequestFailed(user, string(err));
+            return;
+        }
+    
+    // Parse response
+    (string memory recommendation, uint256 confidence) = 
+        abi.decode(response, (string, uint256));
         
         // Store insight
         userInsights[user] = AIInsight({
@@ -189,9 +204,24 @@ contract AegisVault is ChainlinkClient, ConfirmedOwner, IAegisVault {
     /**
      * @dev Get current ETH value in USD using Chainlink Data Feed
      */
+    // ✅ TAMBAHKAN validasi lengkap
     function getAssetValueInUSD(uint256 ethAmount) public view returns (uint256) {
-        return ethAmount.getConversionRate(s_priceFeed);
-    }
+        require(address(s_priceFeed) != address(0), "Price feed not set");
+    
+        (
+            uint80 roundId,
+            int256 price,
+            ,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        ) = s_priceFeed.latestRoundData();
+    
+        require(price > 0, "Invalid price");
+        require(updatedAt >= block.timestamp - 2 hours, "Stale price");
+        require(answeredInRound >= roundId, "Round incomplete");
+    
+        return (ethAmount * uint256(price)) / 1e18;
+}
     
     /**
      * @dev Emergency pause function
@@ -209,17 +239,6 @@ contract AegisVault is ChainlinkClient, ConfirmedOwner, IAegisVault {
     }
     
     // ========== INTERNAL FUNCTIONS ==========
-    
-    function _requestAIInsight(address user) internal {
-        // In production, would call requestAIInsight()
-        // For demo, simulate with mock data
-        userInsights[user] = AIInsight({
-            timestamp: block.timestamp,
-            recommendation: "Hold - Market conditions favorable",
-            confidence: 75,
-            riskLevel: RiskLevel.LOW
-        });
-    }
     
     function _calculateRiskLevel(uint256 confidence) internal pure returns (RiskLevel) {
         if (confidence >= 80) return RiskLevel.LOW;
