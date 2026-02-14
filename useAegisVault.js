@@ -1,146 +1,134 @@
-// frontend/hooks/useAegisVault.js
-import { useState, useEffect } from 'react';
+// frontend/src/hooks/useAegisVault.js
+import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { useEthereum } from './useEthereum';
+import { useWeb3 } from '../contexts/Web3Context';
+import { VAULT_ABI, CONTRACT_ADDRESSES } from '../constants/abi';
+import { toast } from 'react-hot-toast';
 
-// ✅ ABI LENGKAP dengan fungsi AI
-const VAULT_ABI = [
-  // ========== CORE FUNCTIONS ==========
-  "function deposit(address rwaToken, uint256 amount) external returns (uint256)",
-  "function withdraw(address rwaToken, uint256 shareAmount) external returns (uint256)",
-  
-  // ========== AI FUNCTIONS ==========
-  "function storeAIInsight(address user, string calldata recommendation, uint256 confidence) external",
-  "function userInsights(address user) external view returns (uint256 timestamp, string recommendation, uint256 confidence, uint8 riskLevel)",
-  
-  // ========== VIEW FUNCTIONS ==========
-  "function totalAssets() external view returns (uint256)",
-  "function totalShares() external view returns (uint256)",
-  "function shares(address user) external view returns (uint256)",
-  "function getAssetValueInUSD(uint256 ethAmount) external view returns (uint256)",
-  "function hasActiveSubscription(address user) external view returns (bool)",
-  
-  // ========== EVENTS ==========
-  "event Deposit(address indexed user, uint256 assets, uint256 shares)",
-  "event Withdraw(address indexed user, uint256 assets, uint256 shares)",
-  "event AIReceived(address indexed user, string recommendation, uint256 confidence)"
-];
-
-export const useAegisVault = (vaultAddress) => {
-  const { provider, signer, account } = useEthereum();
+export const useAegisVault = () => {
+  const { provider, signer, account, chainId } = useWeb3();
   const [vault, setVault] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  
-  // ========== INITIALIZE ==========
+  const [stats, setStats] = useState({
+    totalAssets: '0',
+    totalShares: '0',
+    userShares: '0',
+    userValueUSD: '0',
+    hasSubscription: false
+  });
+
+  // ========== INITIALIZE CONTRACT ==========
   useEffect(() => {
-    if (provider && vaultAddress) {
-      const vaultContract = new ethers.Contract(
-        vaultAddress,
-        VAULT_ABI,
-        provider
-      );
-      setVault(vaultContract);
+    if (provider && chainId) {
+      const address = CONTRACT_ADDRESSES[chainId]?.vault;
+      if (address) {
+        const contract = new ethers.Contract(address, VAULT_ABI, provider);
+        setVault(contract);
+      }
     }
-  }, [provider, vaultAddress]);
-  
-  // ========== VAULT FUNCTIONS ==========
-  
+  }, [provider, chainId]);
+
+  // ========== LOAD VAULT STATS ==========
+  const loadStats = useCallback(async () => {
+    if (!vault || !account) return;
+
+    try {
+      const [totalAssets, totalShares, userShares, subscription] = await Promise.all([
+        vault.totalAssets(),
+        vault.totalShares(),
+        vault.shares(account),
+        vault.hasActiveSubscription(account)
+      ]);
+
+      // Get ETH price in USD
+      let userValueUSD = '0';
+      if (userShares > 0) {
+        const price = await vault.getAssetValueInUSD(userShares);
+        userValueUSD = ethers.utils.formatEther(price);
+      }
+
+      setStats({
+        totalAssets: ethers.utils.formatEther(totalAssets),
+        totalShares: ethers.utils.formatEther(totalShares),
+        userShares: ethers.utils.formatEther(userShares),
+        userValueUSD: (parseFloat(userValueUSD) * parseFloat(ethers.utils.formatEther(userShares))).toFixed(2),
+        hasSubscription: subscription
+      });
+
+    } catch (err) {
+      console.error('Error loading stats:', err);
+    }
+  }, [vault, account]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // ========== DEPOSIT ==========
   const deposit = async (rwaToken, amount) => {
     try {
       setLoading(true);
-      setError(null);
       
+      if (!signer) throw new Error('Please connect wallet');
+      if (!stats.hasSubscription) throw new Error('No active subscription');
+
       const contract = vault.connect(signer);
-      const tx = await contract.deposit(rwaToken, amount);
+      const tx = await contract.deposit(rwaToken, ethers.utils.parseEther(amount));
+      
+      toast.loading('Processing deposit...', { id: 'deposit' });
+      
       const receipt = await tx.wait();
       
-      // Cari event Deposit
-      const event = receipt.events?.find(e => e.event === 'Deposit');
-      const shares = event?.args?.shares;
+      toast.success('Deposit successful!', { id: 'deposit' });
       
-      setLoading(false);
-      return { success: true, tx, shares, receipt };
+      await loadStats();
       
+      return { success: true, tx, receipt };
+
     } catch (err) {
-      setError(err.message);
-      setLoading(false);
+      console.error('Deposit error:', err);
+      toast.error(err.message, { id: 'deposit' });
       return { success: false, error: err.message };
+    } finally {
+      setLoading(false);
     }
   };
-  
+
+  // ========== WITHDRAW ==========
   const withdraw = async (rwaToken, shareAmount) => {
     try {
       setLoading(true);
-      setError(null);
       
+      if (!signer) throw new Error('Please connect wallet');
+
       const contract = vault.connect(signer);
-      const tx = await contract.withdraw(rwaToken, shareAmount);
+      const tx = await contract.withdraw(rwaToken, ethers.utils.parseEther(shareAmount));
+      
+      toast.loading('Processing withdrawal...', { id: 'withdraw' });
+      
       const receipt = await tx.wait();
       
-      setLoading(false);
-      return { success: true, tx, receipt };
+      toast.success('Withdrawal successful!', { id: 'withdraw' });
       
+      await loadStats();
+      
+      return { success: true, tx, receipt };
+
     } catch (err) {
-      setError(err.message);
-      setLoading(false);
+      console.error('Withdraw error:', err);
+      toast.error(err.message, { id: 'withdraw' });
       return { success: false, error: err.message };
+    } finally {
+      setLoading(false);
     }
   };
-  
-  // ========== VIEW FUNCTIONS ==========
-  
-  const getUserShares = async (userAddress) => {
-    try {
-      if (!vault) return 0;
-      return await vault.shares(userAddress || account);
-    } catch (err) {
-      console.error('Error getting shares:', err);
-      return 0;
-    }
-  };
-  
-  const getTotalAssets = async () => {
-    try {
-      if (!vault) return 0;
-      return await vault.totalAssets();
-    } catch (err) {
-      console.error('Error getting total assets:', err);
-      return 0;
-    }
-  };
-  
-  const getAssetValue = async (ethAmount) => {
-    try {
-      if (!vault) return 0;
-      return await vault.getAssetValueInUSD(ethAmount);
-    } catch (err) {
-      console.error('Error getting asset value:', err);
-      return 0;
-    }
-  };
-  
-  // ========== SUBSCRIPTION ==========
-  
-  const checkSubscription = async (userAddress) => {
-    try {
-      if (!vault) return false;
-      return await vault.hasActiveSubscription(userAddress || account);
-    } catch (err) {
-      console.error('Error checking subscription:', err);
-      return false;
-    }
-  };
-  
+
   return {
     vault,
+    stats,
     loading,
-    error,
     deposit,
     withdraw,
-    getUserShares,
-    getTotalAssets,
-    getAssetValue,
-    checkSubscription
+    refreshStats: loadStats
   };
 };
