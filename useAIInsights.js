@@ -1,57 +1,49 @@
-// frontend/hooks/useAIInsights.js
-import { useState, useEffect } from 'react';
+// frontend/src/hooks/useAIInsights.js
+import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { useEthereum } from './useEthereum';
+import { useWeb3 } from '../contexts/Web3Context';
+import { AI_CONTROLLER_ABI, CONTRACT_ADDRESSES } from '../constants/abi';
+import { toast } from 'react-hot-toast';
 
-// ✅ ABI untuk AegisAIController
-const AI_CONTROLLER_ABI = [
-  "function requestAIAnalysis(address user, string calldata assetType, string calldata riskProfile) external returns (bytes32)",
-  "function getRequestStatus(bytes32 requestId) external view returns (address user, uint256 timestamp, bool exists)",
-  "function getActiveModel() external view returns (string version, string provider, uint256 accuracy, bool active)",
-  "function switchProvider(string calldata provider) external",
-  
-  "event AIRequested(address indexed user, bytes32 indexed requestId)",
-  "event AIResponseReceived(address indexed user, string recommendation, uint256 confidence)",
-  "event AIRequestFailed(bytes32 indexed requestId, string error)"
-];
-
-// ✅ ABI untuk AegisVault (bagian AI)
-const VAULT_AI_ABI = [
-  "function userInsights(address user) external view returns (uint256 timestamp, string recommendation, uint256 confidence, uint8 riskLevel)"
-];
-
-export const useAIInsights = (controllerAddress, vaultAddress) => {
-  const { provider, signer, account } = useEthereum();
+export const useAIInsights = () => {
+  const { provider, signer, account, chainId } = useWeb3();
   const [controller, setController] = useState(null);
   const [vault, setVault] = useState(null);
-  const [insight, setInsight] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [aiModel, setAiModel] = useState({ version: '', provider: '', accuracy: 0 });
-  
-  // ========== INITIALIZE ==========
+  const [insight, setInsight] = useState(null);
+  const [aiModel, setAiModel] = useState({
+    version: '',
+    provider: '',
+    accuracy: 0,
+    active: false
+  });
+  const [pendingRequest, setPendingRequest] = useState(null);
+
+  // ========== INITIALIZE CONTRACTS ==========
   useEffect(() => {
-    if (provider) {
-      if (controllerAddress) {
+    if (provider && chainId) {
+      const addresses = CONTRACT_ADDRESSES[chainId];
+      
+      if (addresses?.aiController) {
         const controllerContract = new ethers.Contract(
-          controllerAddress,
+          addresses.aiController,
           AI_CONTROLLER_ABI,
           provider
         );
         setController(controllerContract);
       }
       
-      if (vaultAddress) {
+      if (addresses?.vault) {
         const vaultContract = new ethers.Contract(
-          vaultAddress,
-          VAULT_AI_ABI,
+          addresses.vault,
+          ['function userInsights(address) view returns (uint256,string,uint256,uint8)'],
           provider
         );
         setVault(vaultContract);
       }
     }
-  }, [provider, controllerAddress, vaultAddress]);
-  
+  }, [provider, chainId]);
+
   // ========== LOAD AI MODEL INFO ==========
   useEffect(() => {
     const loadModelInfo = async () => {
@@ -59,7 +51,12 @@ export const useAIInsights = (controllerAddress, vaultAddress) => {
       
       try {
         const [version, provider, accuracy, active] = await controller.getActiveModel();
-        setAiModel({ version, provider, accuracy: accuracy.toNumber(), active });
+        setAiModel({
+          version,
+          provider,
+          accuracy: accuracy.toNumber(),
+          active
+        });
       } catch (err) {
         console.error('Error loading AI model:', err);
       }
@@ -67,145 +64,156 @@ export const useAIInsights = (controllerAddress, vaultAddress) => {
     
     loadModelInfo();
   }, [controller]);
-  
+
   // ========== LOAD USER INSIGHT ==========
-  useEffect(() => {
-    const loadUserInsight = async () => {
-      if (!vault || !account) return;
+  const loadUserInsight = useCallback(async () => {
+    if (!vault || !account) return;
+
+    try {
+      const result = await vault.userInsights(account);
       
-      try {
-        const result = await vault.userInsights(account);
-        
-        if (result.timestamp > 0) {
-          setInsight({
-            timestamp: new Date(result.timestamp.toNumber() * 1000),
-            recommendation: result.recommendation,
-            confidence: result.confidence.toNumber(),
-            riskLevel: ['LOW', 'MEDIUM', 'HIGH'][result.riskLevel]
-          });
-        }
-      } catch (err) {
-        console.error('Error loading insight:', err);
+      if (result.timestamp > 0) {
+        setInsight({
+          timestamp: new Date(result.timestamp.toNumber() * 1000),
+          recommendation: result.recommendation,
+          confidence: result.confidence.toNumber(),
+          riskLevel: ['LOW', 'MEDIUM', 'HIGH'][result.riskLevel]
+        });
       }
-    };
-    
-    loadUserInsight();
-    
-    // Listen untuk AI response
-    if (controller) {
-      const filter = controller.filters.AIResponseReceived(account);
-      
-      controller.on(filter, (user, recommendation, confidence) => {
-        console.log('🎯 AI Insight Received!', { recommendation, confidence });
-        loadUserInsight(); // Reload insight
-      });
-      
-      return () => {
-        controller.removeAllListeners(filter);
-      };
+    } catch (err) {
+      console.error('Error loading insight:', err);
     }
-  }, [vault, controller, account]);
-  
+  }, [vault, account]);
+
+  useEffect(() => {
+    loadUserInsight();
+  }, [loadUserInsight]);
+
+  // ========== LISTEN FOR AI RESPONSE ==========
+  useEffect(() => {
+    if (!controller || !account) return;
+
+    const filter = controller.filters.AIResponseReceived(account);
+    
+    const handler = (user, recommendation, confidence) => {
+      toast.success('✨ New AI insight received!');
+      loadUserInsight();
+      setPendingRequest(null);
+    };
+
+    controller.on(filter, handler);
+
+    return () => {
+      controller.off(filter, handler);
+    };
+  }, [controller, account, loadUserInsight]);
+
   // ========== REQUEST AI ANALYSIS ==========
   const requestAIAnalysis = async (assetType = 'Real Estate', riskProfile = 'Moderate') => {
     try {
       setLoading(true);
-      setError(null);
       
       if (!controller) throw new Error('AI Controller not initialized');
-      if (!account) throw new Error('No account connected');
-      
-      console.log(`🤖 Requesting AI analysis...`, { assetType, riskProfile });
-      
+      if (!signer) throw new Error('Please connect wallet');
+
+      toast.loading('🤖 Requesting AI analysis...', { id: 'ai-request' });
+
       const contract = controller.connect(signer);
       const tx = await contract.requestAIAnalysis(account, assetType, riskProfile);
+      
       const receipt = await tx.wait();
       
-      // Cari event AIRequested
+      // Find AIRequested event
       const event = receipt.events?.find(e => e.event === 'AIRequested');
       const requestId = event?.args?.requestId;
       
-      console.log(`✅ AI Request sent! Request ID: ${requestId}`);
-      
-      setLoading(false);
-      return { success: true, requestId, tx, receipt };
-      
+      setPendingRequest({
+        requestId,
+        timestamp: Date.now(),
+        assetType,
+        riskProfile
+      });
+
+      toast.success('AI analysis requested! Waiting for response...', { id: 'ai-request' });
+
+      return { success: true, requestId, tx };
+
     } catch (err) {
-      console.error('❌ AI Request failed:', err);
+      console.error('AI request error:', err);
       
-      // User-friendly error messages
-      let errorMessage = 'Failed to get AI insight';
-      
+      let errorMessage = 'Failed to request AI analysis';
       if (err.message.includes('insufficient funds')) {
-        errorMessage = 'Insufficient LINK balance. Please fund subscription.';
+        errorMessage = 'Insufficient LINK balance';
       } else if (err.message.includes('user rejected')) {
         errorMessage = 'Transaction cancelled';
-      } else if (err.message.includes('timeout')) {
-        errorMessage = 'AI request timeout. Please try again.';
-      } else if (err.message.includes('API key')) {
-        errorMessage = 'OpenAI API key configuration issue';
       }
       
-      setError(errorMessage);
+      toast.error(errorMessage, { id: 'ai-request' });
+      
+      return { success: false, error: err.message };
+    } finally {
       setLoading(false);
-      return { success: false, error: errorMessage };
     }
   };
-  
+
   // ========== SWITCH AI PROVIDER ==========
   const switchProvider = async (provider) => {
     try {
       setLoading(true);
       
+      if (!controller) throw new Error('Controller not initialized');
+      if (!signer) throw new Error('Please connect wallet');
+
       const contract = controller.connect(signer);
       const tx = await contract.switchProvider(provider);
       await tx.wait();
-      
-      console.log(`✅ Switched to ${provider}`);
-      
+
       // Reload model info
       const [version, prov, accuracy, active] = await controller.getActiveModel();
-      setAiModel({ version, provider: prov, accuracy: accuracy.toNumber(), active });
-      
-      setLoading(false);
+      setAiModel({
+        version,
+        provider: prov,
+        accuracy: accuracy.toNumber(),
+        active
+      });
+
+      toast.success(`Switched to ${provider === 'openai' ? 'OpenAI GPT-4' : 'Google Gemini'}`);
+
       return { success: true };
-      
+
     } catch (err) {
-      console.error('❌ Failed to switch provider:', err);
-      setError(err.message);
-      setLoading(false);
+      console.error('Switch provider error:', err);
+      toast.error(err.message);
       return { success: false, error: err.message };
+    } finally {
+      setLoading(false);
     }
   };
-  
-  // ========== FORMAT RECOMMENDATION ==========
+
+  // ========== HELPER FUNCTIONS ==========
   const getRecommendationColor = (recommendation) => {
     switch (recommendation) {
-      case 'BUY': return 'text-green-600 bg-green-100';
-      case 'HOLD': return 'text-yellow-600 bg-yellow-100';
-      case 'SELL': return 'text-red-600 bg-red-100';
-      default: return 'text-gray-600 bg-gray-100';
+      case 'BUY': return 'bg-green-100 text-green-800 border-green-200';
+      case 'HOLD': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'SELL': return 'bg-red-100 text-red-800 border-red-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
   };
-  
-  const getRiskLevelColor = (riskLevel) => {
-    switch (riskLevel) {
-      case 'LOW': return 'text-green-600';
-      case 'MEDIUM': return 'text-yellow-600';
-      case 'HIGH': return 'text-red-600';
-      default: return 'text-gray-600';
-    }
+
+  const getConfidenceColor = (confidence) => {
+    if (confidence >= 80) return 'text-green-600';
+    if (confidence >= 60) return 'text-yellow-600';
+    return 'text-red-600';
   };
-  
+
   return {
     insight,
-    loading,
-    error,
     aiModel,
+    loading,
+    pendingRequest,
     requestAIAnalysis,
     switchProvider,
     getRecommendationColor,
-    getRiskLevelColor,
-    isConnected: !!account
+    getConfidenceColor
   };
 };
