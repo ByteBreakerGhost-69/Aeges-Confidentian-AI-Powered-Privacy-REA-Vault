@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta
+      name="description"
+      content="Aegis Confidential - AI-Powered Privacy RWA Vault with Chainlink Functions + OpenAI GPT-4"
+    />
+    <meta name="keywords" content="Chainlink, AI, OpenAI, GPT-4, RWA, Vault, Blockchain, Ethereum, Hardhat" />
+    <meta name="author" content="Aegis Team" />
+    
+    <!-- Open Graph / Social Media -->
+    <meta property="og:title" content="Aegis Confidential - AI-Powered Privacy RWA Vault" />
+    <meta property="og:description" content="Real AI integration with Chainlink Functions + OpenAI GPT-4 for RWA investment recommendations" />
+    <meta property="og:image" content="%PUBLIC_URL%/og-image.png" />
+    <meta property="og:url" content="https://aegis-confidential.vercel.app" />
+    
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Aegis Confidential" />
+    <meta name="twitter:description" content="AI-Powered Privacy RWA Vault with Chainlink Functions" />
+    
+    <!-- Favicon -->
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <title>Aegis Confidential | AI-Powered RWA Vault</title>
+  </head>
+  <body>
+    <noscript>
+      <div style="text-align: center; padding: 40px; font-family: sans-serif;">
+        <h1 style="color: #2563eb;">Aegis Confidential</h1>
+        <p style="color: #4b5563;">JavaScript is required to run this application.</p>
+        <p style="color: #6b7280; font-size: 14px;">Please enable JavaScript in your browser settings.</p>
+        <hr style="margin: 30px auto; width: 100px; border-color: #e5e7eb;" />
+        <p style="color: #9ca3af; font-size: 12px;">Built with Chainlink Functions + OpenAI GPT-4</p>
+      </div>
+    </noscript>
+    
+    <div id="root"></div>
+    
+    <!-- Loading indicator (shown until React loads) -->
+    <div id="initial-loader" style="
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-family: 'Inter', sans-serif;
+      z-index: 9999;
+      transition: opacity 0.5s;
+    ">
+      <div style="
+        width: 60px;
+        height: 60px;
+        border: 4px solid rgba(255,255,255,0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      "></div>
+      <h2 style="margin: 0; font-weight: 600; font-size: 24px;">Aegis Confidential</h2>
+      <p style="margin: 10px 0 0; opacity: 0.9;">Loading AI-Powered RWA Vault...</p>
+      <p style="margin: 5px 0 0; font-size: 12px; opacity: 0.7;">Chainlink Functions • OpenAI GPT-4</p>
+    </div>
+    
+    <style>
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      
+      #root {
+        min-height: 100vh;
+      }
+    </style>
+    
+    <script>
+      // Hide loader when React is ready
+      window.addEventListener('load', function() {
+        setTimeout(function() {
+          document.getElementById('initial-loader').style.opacity = '0';
+          setTimeout(function() {
+            document.getElementById('initial-loader').style.display = 'none';
+          }, 500);
+        }, 1000);
+      });
+    </script>
+  </body>
+  </html>
